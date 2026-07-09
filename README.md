@@ -31,7 +31,7 @@ Install both APKs before continuing.
 Open **Termux** on your tablet and run:
 
 ```bash
-curl -O https://raw.githubusercontent.com/orailnoor/termux-linux-setup/main/setup.sh && chmod +x setup.sh && ./setup.sh
+curl -O https://raw.githubusercontent.com/Unterschreiber/termux-linux-setup/main/setup.sh && chmod +x setup.sh && ./setup.sh
 ```
 
 The script will:
