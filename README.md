@@ -85,4 +85,4 @@ If you chose auto-launch during setup, the desktop starts automatically every ti
 
 ## Credits
 
-Based on the original work by [Unterschreiber/termux-linux-setup](https://github.com/Unterschreiber/termux-linux-setup). This fork is maintained by Orailnoor as a leaner, device-specific build for the Galaxy Tab S8 Ultra.
+Based on the original work by  [orailnoor/termux-linux-setup](https://github.com/orailnoor/termux-linux-setup). This fork is maintained by Me as a leaner, device-specific build for the Galaxy Tab S8 Ultra.
