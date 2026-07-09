@@ -1,6 +1,6 @@
-# termux-linux-setup (Orailnoor Edition)
+# termux-linux-setup (Unterschreiber Edition)
 
-An optimized fork of [Unterschreiber/termux-linux-setup](https://github.com/Unterschreiber/termux-linux-setup), tuned specifically for the **Samsung Galaxy Tab S8 Ultra** (Snapdragon 8 Gen 1 / Adreno 730, 12GB RAM, 256GB storage).
+An optimized fork of [orailnoor/termux-linux-setup](https://github.com/orailnoor/termux-linux-setup), tuned specifically for the **Samsung Galaxy Tab S8 Ultra** (Snapdragon 8 Gen 1 / Adreno 730, 12GB RAM, 256GB storage).
 
 This version trims the original down to a single, lightweight XFCE4 desktop and adds automatic storage integration, better error handling, and a more reliable startup script — instead of offering four desktop environments and Windows app support most tablet users won't need.
 
