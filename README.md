@@ -114,6 +114,7 @@ It opens the Termux:X11 app for you. Switch to that app to see the desktop.
 | `./switch-gpu.sh virgl\|zink\|software` | Swap the GPU rendering mode |
 | `./switch-vulkan.sh turnip\|android` | Swap the host Vulkan loader |
 | `./update-ubuntu.sh` | Update the Termux host and the Ubuntu container |
+| `./polish-desktop.sh` | Silence fixable XFCE startup noise, install wallpapers, drop light-locker |
 | `./stop-linux.sh` | Stop the desktop and clean up sockets |
 
 ### Verifying GPU acceleration
@@ -125,6 +126,26 @@ glxinfo -B | head -20
 ```
 
 You want **zink**, **Turnip**, or **Adreno**. If it says **llvmpipe**, you are on software rendering — try `./switch-vulkan.sh android`, then restart the desktop.
+
+---
+
+---
+
+## Startup warnings you can ignore
+
+The desktop prints a handful of warnings on every launch. Most are permanent: XFCE expects systemd, logind and a system dbus, and PRoot provides none of them. They are noise, not faults.
+
+**Fixable — run `./polish-desktop.sh` once:**
+
+| Message | Cause | Fix |
+|---|---|---|
+| `xubuntu-wallpaper.png: No such file` and a black desktop | that wallpaper ships in `xubuntu-wallpapers`, which the lean XFCE install skips | installs the wallpaper package (data-only, no desktop pulled in) and points xfdesktop at a real image |
+| `Another compositing manager is running on screen 0` | xfwm4 composites on top of Termux:X11, which already does | disables xfwm4 compositing |
+| `light-locker: session_id is not set` | the screen locker needs logind. Worse than noise: it can show a lock screen you cannot dismiss | removes light-locker and blocks its autostart |
+
+**Permanent and harmless — no fix exists in PRoot:**
+
+`Failed to get a systemd proxy` · `Failed to connect to colord` · `polkit ... Error getting authority` · `Failed to get system bus` · `GVFS-RemoteVolumeMonitor ... not supported` · `_IceTransmkdir: euid != 0` · `Failed to fetch _NET_CURRENT_DESKTOP` (startup race, resolves itself) · `pm-is-supported` missing (suspend/resume, meaningless on a tablet)
 
 ---
 
