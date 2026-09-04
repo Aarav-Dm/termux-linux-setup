@@ -29,6 +29,25 @@ These are real failures hit on a Tab S9 Ultra, with the cause in each case.
 | 6 | Unrelated processes killed | `pkill -9 -f "dbus"` matched every dbus on the device | Narrowed to `dbus-daemon --session` and `dbus-launch` |
 | 7 | Possible Termux boot loop | autostart ran on every shell, including non-interactive ones | Guarded to interactive shells, skipped when `DISPLAY` is set, 3s Ctrl+C window |
 | 8 | Broken shebang risk | script was committed with **CRLF** line endings | Normalised to LF |
+| 9 | `MESA: error: ZINK: failed to choose pdev` / `failed to load driver: zink` | **zink runs inside the guest, but Turnip was only installed on the host.** Under PRoot the guest has its own `/usr/lib` and its own Vulkan loader, so it enumerated zero devices. `MESA_LOADER_DRIVER_OVERRIDE=zink` then forbade any fallback, turning a slow desktop into no desktop | Install `mesa-vulkan-drivers` + `libgl1-mesa-dri` **in the guest**, stop forcing the loader override, bind `/dev/kgsl-3d0`, and add a three-way GPU mode switch |
+
+### GPU modes
+
+`./switch-gpu.sh virgl|zink|software`
+
+| Mode | How it works | When to use |
+|---|---|---|
+| **virgl** (default) | Host runs `virgl_test_server_android` and does the real GPU work on Adreno; the guest talks to it via `GALLIUM_DRIVER=virpipe` | Most reliable path under PRoot. Start here |
+| **zink** | Turnip inside the guest, with `VK_ICD_FILENAMES` pointed at the freedreno ICD | Fastest when the guest ships a working ICD |
+| **software** | llvmpipe | Always works. Use to prove the desktop itself is healthy |
+
+Already installed and hitting the zink error? Repair without reinstalling:
+
+```bash
+curl -O https://raw.githubusercontent.com/Aarav-Dm/termux-linux-setup/main/fix-gpu.sh
+chmod +x fix-gpu.sh && ./fix-gpu.sh
+./stop-linux.sh && ./start-linux.sh
+```
 
 ### On the Vulkan loader choice
 
@@ -91,7 +110,8 @@ It opens the Termux:X11 app for you. Switch to that app to see the desktop.
 | `./start-linux-safe.sh` | Software rendering + `-legacy-drawing`, for black screens |
 | `./start-ubuntu-cli.sh` | Ubuntu shell only, no desktop |
 | `./gpu-check.sh` | Show which Vulkan loader and renderer are active |
-| `./switch-vulkan.sh turnip\|android` | Swap the Vulkan loader |
+| `./switch-gpu.sh virgl\|zink\|software` | Swap the GPU rendering mode |
+| `./switch-vulkan.sh turnip\|android` | Swap the host Vulkan loader |
 | `./update-ubuntu.sh` | Update the Termux host and the Ubuntu container |
 | `./stop-linux.sh` | Stop the desktop and clean up sockets |
 

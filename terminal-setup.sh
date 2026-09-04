@@ -496,6 +496,16 @@ step_ubuntu_gpu() {
     install_guest_pkg "libegl1" "libegl1"
     install_guest_pkg "libgles2" "libgles2"
 
+    # FIX 9: these three were the actual cause of
+    #   "MESA: error: ZINK: failed to choose pdev"
+    # zink runs INSIDE the guest, but Turnip was only installed on the host.
+    # Under proot the guest has its own /usr/lib and its own Vulkan loader,
+    # so with no ICD present it enumerates zero devices and zink dies.
+    install_guest_pkg "mesa-vulkan-drivers" "Mesa Vulkan drivers (guest ICD)"
+    install_guest_pkg "libgl1-mesa-dri" "Mesa DRI drivers (guest)"
+    install_guest_pkg "libglx-mesa0" "Mesa GLX (guest)"
+    install_guest_pkg "xdg-desktop-portal" "xdg-desktop-portal"
+
     if [ "$IS_ADRENO" == "1" ]; then
         echo -e "  [*] Trying optional Turnip PPA. Safe if this fails."
         (
@@ -566,16 +576,14 @@ DISTRO_ID="$DISTRO_ID"
 UBUNTU_USER="$UBUNTU_USER"
 EOF
 
+    # HOST-side env only. Guest GPU settings live in ~/.xfce-session.sh and
+    # are chosen by ./switch-gpu.sh. Deliberately no GALLIUM_DRIVER or
+    # MESA_LOADER_DRIVER_OVERRIDE here: they leaked into the container and
+    # forced zink even when the guest had no Vulkan ICD, which is what
+    # produced "ZINK: failed to choose pdev" with no fallback.
     cat > "$HOME/.config/linux-gpu.sh" << 'EOF'
-# Zink on top of Turnip. Sourced by the launchers.
+# Host-side Mesa hints for the Termux X server and virgl. Safe to leak.
 export MESA_NO_ERROR=1
-export MESA_GL_VERSION_OVERRIDE=4.6
-export MESA_GLES_VERSION_OVERRIDE=3.2
-export GALLIUM_DRIVER=zink
-export MESA_LOADER_DRIVER_OVERRIDE=zink
-export TU_DEBUG=noconform
-export MESA_VK_WSI_PRESENT_MODE=immediate
-export ZINK_DESCRIPTORS=lazy
 EOF
 
     echo -e "  [+] Created ~/.config/termux-ubuntu.conf"
@@ -593,7 +601,8 @@ set -u
 DISTRO_ID="${DISTRO_ID:-ubuntu}"
 UBUNTU_USER="${UBUNTU_USER:-droid}"
 
-SOFTWARE_MODE="${SOFTWARE_MODE:-0}"
+GPU_MODE="$(cat "$HOME/.config/gpu-mode" 2>/dev/null || echo virgl)"
+[ "${SOFTWARE_MODE:-0}" = "1" ] && GPU_MODE="software"
 
 BIND_ARGS=(--shared-tmp)
 if [ -d "$HOME/storage/shared" ]; then
@@ -601,30 +610,48 @@ if [ -d "$HOME/storage/shared" ]; then
         BIND_ARGS+=(--bind "$HOME/storage/shared:/mnt/shared")
     fi
 fi
+# Expose the Adreno kernel node so an in-guest Turnip can reach the GPU.
+[ -e /dev/kgsl-3d0 ] && BIND_ARGS+=(--bind /dev/kgsl-3d0:/dev/kgsl-3d0)
 
 LOGIN_USER="root"
 if proot-distro login "$DISTRO_ID" -- id "$UBUNTU_USER" >/dev/null 2>&1; then
     LOGIN_USER="$UBUNTU_USER"
 fi
 
-if [ "$SOFTWARE_MODE" = "1" ]; then
+# FIX 9: never force MESA_LOADER_DRIVER_OVERRIDE. Forcing it forbids Mesa
+# from falling back, so a zink failure became a dead desktop instead of a
+# slow one. Modes are selected with ./switch-gpu.sh
+case "$GPU_MODE" in
+  virgl)
+    GPU_ENV='
+export GALLIUM_DRIVER=virpipe
+export MESA_GL_VERSION_OVERRIDE=4.3COMPAT
+export MESA_GLES_VERSION_OVERRIDE=3.2
+export MESA_NO_ERROR=1
+'
+    ;;
+  zink)
+    GPU_ENV='
+export GALLIUM_DRIVER=zink
+export MESA_GL_VERSION_OVERRIDE=4.3COMPAT
+export MESA_GLES_VERSION_OVERRIDE=3.2
+export MESA_NO_ERROR=1
+export ZINK_DESCRIPTORS=lazy
+export TU_DEBUG=noconform
+export MESA_VK_WSI_PRESENT_MODE=immediate
+for icd in /usr/share/vulkan/icd.d/freedreno_icd.aarch64.json \
+           /usr/share/vulkan/icd.d/freedreno_icd.json; do
+    [ -f "$icd" ] && export VK_ICD_FILENAMES="$icd" && break
+done
+'
+    ;;
+  software|*)
     GPU_ENV='
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
-unset MESA_LOADER_DRIVER_OVERRIDE
 '
-else
-    GPU_ENV='
-export MESA_NO_ERROR=1
-export MESA_GL_VERSION_OVERRIDE=4.6
-export MESA_GLES_VERSION_OVERRIDE=3.2
-export GALLIUM_DRIVER=zink
-export MESA_LOADER_DRIVER_OVERRIDE=zink
-export TU_DEBUG=noconform
-export MESA_VK_WSI_PRESENT_MODE=immediate
-export ZINK_DESCRIPTORS=lazy
-'
-fi
+    ;;
+esac
 
 exec proot-distro login "$DISTRO_ID" "${BIND_ARGS[@]}" --user "$LOGIN_USER" -- bash -lc "
 export DISPLAY=:0
@@ -849,6 +876,35 @@ esac
 VKEOF
     chmod +x "$HOME/switch-vulkan.sh"
     echo -e "  [+] Created ~/switch-vulkan.sh"
+
+    # ---- GPU mode (virgl default: most reliable under proot) ----
+    [ -f "$HOME/.config/gpu-mode" ] || echo "virgl" > "$HOME/.config/gpu-mode"
+
+    cat > "$HOME/switch-gpu.sh" << 'SWGPUEOF'
+#!/data/data/com.termux/files/usr/bin/bash
+# Usage: ./switch-gpu.sh virgl|zink|software
+set -u
+MODE="${1:-}"
+case "$MODE" in
+  virgl|zink|software)
+    echo "$MODE" > "$HOME/.config/gpu-mode"
+    echo "[+] GPU mode set to: $MODE"
+    echo "    Restart the desktop:  ./stop-linux.sh && ./start-linux.sh"
+    ;;
+  *)
+    echo "Current mode: $(cat "$HOME/.config/gpu-mode" 2>/dev/null || echo virgl)"
+    echo ""
+    echo "Usage: $0 virgl|zink|software"
+    echo ""
+    echo "  virgl    - host does the GPU work, guest uses virpipe."
+    echo "             Most reliable under proot. Default."
+    echo "  zink     - Turnip inside the guest. Fastest when it works."
+    echo "  software - llvmpipe. Always works, no GPU."
+    exit 1 ;;
+esac
+SWGPUEOF
+    chmod +x "$HOME/switch-gpu.sh"
+    echo -e "  [+] Created ~/switch-gpu.sh (mode: virgl)"
 
     # ---- GPU check ----
     cat > "$HOME/gpu-check.sh" << 'GPUEOF'
