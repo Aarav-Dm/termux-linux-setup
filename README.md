@@ -1,88 +1,189 @@
-# termux-linux-setup (Unterschreiber Edition)
+# termux-linux-setup — Galaxy Tab S8 Ultra / S9 Ultra
 
-An optimized fork of [orailnoor/termux-linux-setup](https://github.com/orailnoor/termux-linux-setup), tuned specifically for the **Samsung Galaxy Tab S8 Ultra** (Snapdragon 8 Gen 1 / Adreno 730, 12GB RAM, 256GB storage).
+A hardened fork of [Unterschreiber/termux-linux-setup](https://github.com/Unterschreiber/termux-linux-setup) (itself a fork of [orailnoor/termux-linux-setup](https://github.com/orailnoor/termux-linux-setup)), extended to cover the **Galaxy Tab S9 Ultra** and with a batch of real installer and startup bugs fixed.
 
-This version trims the original down to a single, lightweight XFCE4 desktop and adds automatic storage integration, better error handling, and a more reliable startup script — instead of offering four desktop environments and Windows app support most tablet users won't need.
+**One script.** It sets up a minimal Termux host, installs **Ubuntu 24.04** through `proot-distro`, puts a lean **XFCE4** desktop inside it, and renders that through **Termux:X11** with Turnip/Zink GPU acceleration on Adreno.
 
-### What's different from the original
-- **XFCE4 only** — no LXQt/MATE/KDE picker, since XFCE is the best RAM/performance fit for this hardware
-- **No Wine/Hangover** — Windows app support removed to keep the install lean
-- **No Firefox/VLC bundled** — install whatever browser/player you actually use from Termux yourself
-- **Turnip/Adreno GPU acceleration** hardcoded for the Adreno 730, no brand-detection guesswork
-- **Automatic shared storage setup** — runs `termux-setup-storage` and links `~/Storage` to your device's shared storage automatically
-- **Real error handling** — failed package installs are logged to `~/linux-setup-errors.log` and reported at the end instead of silently failing
-- **Smarter start-linux.sh** — checks that X11 and audio actually started instead of just guessing with fixed `sleep` delays
-- **Optional auto-launch** — choose whether the desktop starts automatically every time you open Termux
+| | |
+|---|---|
+| **Host** | Termux, kept minimal (X11 server, PulseAudio, proot-distro, GPU drivers) |
+| **Guest** | Ubuntu 24.04 LTS via proot-distro |
+| **Desktop** | XFCE4 lean set, not `xubuntu-desktop` |
+| **GPU** | Turnip + Zink on Adreno, VirGL/llvmpipe fallback |
+
+Tested targets: **Tab S8 Ultra** (SD 8 Gen 1 / Adreno 730) and **Tab S9 Ultra** (SD 8 Gen 2 for Galaxy / Adreno 740). Both share the same 14.6in 2960x1848 panel, so one script covers both.
+
+---
+
+## What this fork fixes
+
+These are real failures hit on a Tab S9 Ultra, with the cause in each case.
+
+| # | Bug | Cause | Fix |
+|---|---|---|---|
+| 1 | `Installing Mesa Zink core... (failed)` | `mesa-zink` lives in **tur-repo**, which was never installed | Install `x11-repo` **and** `tur-repo`, then refresh |
+| 2 | `Installing Vulkan loader... (failed)` | `vulkan-loader-generic` and `vulkan-loader-android` **conflict**; one was already present | Remove the conflicting loader first, then install the chosen path |
+| 3 | `/tmp/pulse-err.log: Permission denied` | `/tmp` is Android's root filesystem and is **not writable** from Termux | All logs moved to `$TMPDIR` (`$PREFIX/tmp`) |
+| 4 | `X server already running on display :0` then `xrdb: Connection refused` | `pkill` left a **stale socket** at `$TMPDIR/.X11-unix/X0`; the wait loop saw it and launched XFCE against a server that was not listening | `am force-stop com.termux.x11`, delete the stale socket, and use `termux-x11 -xstartup` so the server launches the session itself |
+| 5 | Silently ignored X11 flags | `-ac` and `-xkbdir` are **not** termux-x11 flags | Removed. XKB now comes from `XKB_CONFIG_ROOT` |
+| 6 | Unrelated processes killed | `pkill -9 -f "dbus"` matched every dbus on the device | Narrowed to `dbus-daemon --session` and `dbus-launch` |
+| 7 | Possible Termux boot loop | autostart ran on every shell, including non-interactive ones | Guarded to interactive shells, skipped when `DISPLAY` is set, 3s Ctrl+C window |
+| 8 | Broken shebang risk | script was committed with **CRLF** line endings | Normalised to LF |
+
+### On the Vulkan loader choice
+
+The two loaders are mutually exclusive:
+
+- **Turnip path (default)** — `vulkan-loader-generic` + `mesa-vulkan-icd-freedreno` + `mesa-zink`. Open-source Turnip driver talking to KGSL.
+- **Android path (fallback)** — `vulkan-loader-android` + `mesa-zink`. Uses Qualcomm's system Vulkan driver. Known to crash zink on some Adreno parts with a memory-type assertion ([TUR issue #530](https://github.com/termux-user-repository/tur/issues/530), reported on Tab S8+, S22 Ultra, S23 Ultra).
+
+The script defaults to Turnip. Switch at any time with `./switch-vulkan.sh android`.
+
+---
 
 ## Prerequisites
 
-Before running this script, install the correct versions of these two apps on your tablet.
+Install both apps **before** running the script. Their versions must match each other.
 
-1. **Termux Base App**: Do not install Termux from the Google Play Store — that version is outdated and no longer works correctly. Get the official, maintained version from F-Droid:
-   * [Download Termux (F-Droid)](https://f-droid.org/en/packages/com.termux/)
+**1. Termux** — not from Google Play, that build is unmaintained.
+- [F-Droid](https://f-droid.org/en/packages/com.termux/) or [GitHub releases](https://github.com/termux/termux-app/releases)
 
-2. **Termux-X11 App**: This is the display server that actually renders your Linux desktop on screen. It's no longer on F-Droid, so grab the companion APK (`app-arm64-v8a-debug.apk`) directly from GitHub releases:
-   * [Download Termux-X11 Nightly (GitHub)](https://github.com/termux/termux-x11/releases/tag/nightly)
+**2. Termux:X11 (nightly)** — the display server that renders the desktop.
+- [Nightly release](https://github.com/termux/termux-x11/releases/tag/nightly) — grab `app-arm64-v8a-debug.apk` or `termux-x11-universal-debug.apk`
 
-Install both APKs before continuing.
+> The APK must be the **nightly** build, because the script installs the `termux-x11-nightly` package. A mismatch between APK and package produces exactly the "X server already running / Connection refused" symptoms this fork fixes.
 
-## How to Install
+Open each app once after installing.
 
-Open **Termux** on your tablet and run:
+**Recommended:** enable **Settings → Developer options → Disable child process restrictions**. Android otherwise kills background Termux processes once they exceed the phantom process limit.
+
+---
+
+## Install
+
+In Termux:
 
 ```bash
-curl -O https://raw.githubusercontent.com/Unterschreiber/termux-linux-setup/main/setup.sh && chmod +x setup.sh && ./setup.sh
+curl -O https://raw.githubusercontent.com/Aarav-Dm/termux-linux-setup/main/terminal-setup.sh
+chmod +x terminal-setup.sh
+./terminal-setup.sh
 ```
 
-The script will:
-1. Run pre-flight checks (internet connection, free storage space)
-2. Update Termux packages
-3. Install Termux-X11 and XFCE4
-4. Install Turnip GPU acceleration for the Adreno 730
-5. Install PulseAudio
-6. Install Python, Git, Neovim/Vim, build tools, SSH, and network tools
-7. Set up automatic shared storage access at `~/Storage`
-8. Create `start-linux.sh` and `stop-linux.sh`
-9. Add desktop shortcuts
+Roughly **15 to 40 minutes** depending on your connection. Needs about **8 GB free**.
 
-Installation takes roughly 15–30 minutes depending on your connection.
+The script runs 10 steps: pre-flight checks, host update, host base packages and the Vulkan stack, Ubuntu rootfs, Ubuntu bootstrap and user creation, XFCE4, GPU tools, dev tools, shared storage, launchers, and desktop shortcuts.
+
+Anything that fails is logged to `~/linux-setup-errors.log` and listed in a summary at the end rather than failing silently.
+
+---
 
 ## Usage
-
-Once the install finishes, open the **Termux-X11** app first (it just needs to be open, not doing anything), then in Termux run:
 
 ```bash
 ./start-linux.sh
 ```
 
-Switch to the Termux-X11 app to see your XFCE4 desktop. When you're done:
+It opens the Termux:X11 app for you. Switch to that app to see the desktop.
+
+| Command | What it does |
+|---|---|
+| `./start-linux.sh` | Start the XFCE4 desktop with GPU acceleration |
+| `./start-linux-safe.sh` | Software rendering + `-legacy-drawing`, for black screens |
+| `./start-ubuntu-cli.sh` | Ubuntu shell only, no desktop |
+| `./gpu-check.sh` | Show which Vulkan loader and renderer are active |
+| `./switch-vulkan.sh turnip\|android` | Swap the Vulkan loader |
+| `./update-ubuntu.sh` | Update the Termux host and the Ubuntu container |
+| `./stop-linux.sh` | Stop the desktop and clean up sockets |
+
+### Verifying GPU acceleration
+
+Inside the XFCE terminal:
 
 ```bash
-./stop-linux.sh
+glxinfo -B | head -20
 ```
 
-If you chose auto-launch during setup, the desktop starts automatically every time you open Termux.
+You want **zink**, **Turnip**, or **Adreno**. If it says **llvmpipe**, you are on software rendering — try `./switch-vulkan.sh android`, then restart the desktop.
 
-## What's Installed
+---
+
+## What's installed
 
 | Category | Tools |
 |---|---|
-| Desktop | XFCE4, Thunar file manager, XFCE4 Terminal |
-| Graphics | Mesa/Zink, Turnip Vulkan driver (Adreno 730) |
-| Audio | PulseAudio |
-| Dev | Python 3, pip, Git, Neovim, Vim |
-| Build tools | build-essential, clang, cmake, pkg-config |
-| SSH | OpenSSH (client + server) |
-| Networking | net-tools, iproute2, nmap, curl, wget, rsync |
-| Storage | Shared device storage auto-linked to `~/Storage` |
+| Desktop | XFCE4 (session, panel, xfwm4, xfdesktop, settings), Thunar, Mousepad, Whisker menu |
+| Graphics | Mesa Zink, Turnip Vulkan ICD, VirGL fallback, mesa-utils, vulkan-tools |
+| Audio | PulseAudio with a TCP bridge into the container, pavucontrol |
+| Dev | Python 3 + pip + venv, Git, Neovim, Vim |
+| Build | build-essential, clang, cmake, pkg-config |
+| Network | OpenSSH client and server, net-tools, iproute2, nmap, curl, wget, rsync |
+| Fonts | DejaVu, Liberation |
+| Storage | Device storage at `~/Storage` on the host, `/mnt/shared` inside Ubuntu |
+
+---
 
 ## Troubleshooting
 
-- **A package failed to install**: check `~/linux-setup-errors.log` for details, then retry with `apt-get update && apt-get install <package-name>`.
-- **Desktop won't start / X11 errors**: make sure the Termux-X11 app is installed and opened before running `./start-linux.sh`.
-- **No storage access**: run `termux-setup-storage` manually, grant the permission, then run `ln -sfn ~/storage/shared ~/Storage`.
-- **No sound**: check `/tmp/pulse-err.log`, created automatically if PulseAudio fails to start.
+**A package failed to install.** Check `~/linux-setup-errors.log`. For the Vulkan or Zink packages specifically:
+
+```bash
+pkg install -y x11-repo tur-repo
+apt update && apt-get -f install -y
+./switch-vulkan.sh turnip
+```
+
+**`X server already running on display :0`.** Stale socket from a previous run:
+
+```bash
+./stop-linux.sh
+./start-linux.sh
+```
+
+If it persists, force it clean:
+
+```bash
+am force-stop com.termux.x11
+rm -rf $TMPDIR/.X11-unix
+```
+
+**Black screen with only a cursor.** Use `./start-linux-safe.sh`, which adds `-legacy-drawing`.
+
+**`Process completed (signal 9)`.** Android's phantom process killer. Enable *Disable child process restrictions* in Developer options, or from a PC:
+
+```bash
+adb shell "/system/bin/device_config set_sync_disabled_for_tests persistent"
+adb shell "/system/bin/device_config put activity_manager max_phantom_processes 2147483647"
+adb shell settings put global settings_enable_monitor_phantom_procs false
+```
+
+**No sound.** Check `$TMPDIR/pulse-err.log`. The desktop still runs without audio.
+
+**No storage access.** Run `termux-setup-storage`, grant the permission, then `ln -sfn ~/storage/shared ~/Storage`.
+
+**Running alongside omarchy-android or another X11 desktop.** Both claim display `:0` and will fight. Run `./stop-linux.sh` before switching.
+
+**Starting over.**
+
+```bash
+./stop-linux.sh
+proot-distro remove ubuntu
+./terminal-setup.sh
+```
+
+---
+
+## Notes and limits
+
+Everything here runs under **PRoot**, a userspace syscall translation layer, not a virtual machine. Consequences that no version of this script can fix:
+
+- **No Docker.** The Android kernel lacks the namespaces it needs. Root would not help.
+- **No systemd.** No `systemctl`, no service units.
+- **No x86 binaries** without QEMU emulation.
+- **File I/O is slow.** CPU-bound work runs near native; anything touching thousands of files pays a large penalty.
+- **PRoot is not a security boundary.**
+
+---
 
 ## Credits
 
-Based on the original work by  [orailnoor/termux-linux-setup](https://github.com/orailnoor/termux-linux-setup). This fork is maintained by Me as a leaner, device-specific build for the Galaxy Tab S8 Ultra.
+Original by [orailnoor](https://github.com/orailnoor/termux-linux-setup). Tab S8 Ultra fork by [Unterschreiber](https://github.com/Unterschreiber/termux-linux-setup). This fork adds Tab S9 Ultra support and the bug fixes listed above.
