@@ -59,7 +59,7 @@ if ! proot-distro login "$DISTRO_ID" -- true >/dev/null 2>&1; then
 fi
 
 # ---------- 1. HOST: the virgl + zink pieces ----------
-echo -e "${WHITE}[1/4] Host packages...${NC}"
+echo -e "${WHITE}[1/5] Host packages...${NC}"
 pkg install -y x11-repo tur-repo >/dev/null 2>&1 || true
 apt-get update -y >/dev/null 2>&1 || true
 
@@ -75,7 +75,7 @@ done
 # This is the fix. Without mesa-vulkan-drivers in the guest there is no
 # ICD for zink to find, hence "failed to choose pdev".
 echo ""
-echo -e "${WHITE}[2/4] Guest drivers (this is the missing piece)...${NC}"
+echo -e "${WHITE}[2/5] Guest drivers (this is the missing piece)...${NC}"
 proot-distro login "$DISTRO_ID" -- env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC bash -lc '
 apt-get update -y >/dev/null 2>&1
 apt-get install -y \
@@ -96,7 +96,7 @@ echo -e "  ${GREEN}[+]${NC} mesa-vulkan-drivers + libgl1-mesa-dri installed in $
 
 # ---------- 3. Mode file + switcher ----------
 echo ""
-echo -e "${WHITE}[3/4] Installing GPU mode switch...${NC}"
+echo -e "${WHITE}[3/5] Installing GPU mode switch...${NC}"
 mkdir -p "$HOME/.config"
 [ -f "$HOME/.config/gpu-mode" ] || echo "virgl" > "$HOME/.config/gpu-mode"
 
@@ -128,7 +128,7 @@ echo -e "  ${GREEN}[+]${NC} ~/switch-gpu.sh"
 
 # ---------- 4. Rewrite the session launcher ----------
 echo ""
-echo -e "${WHITE}[4/4] Rewriting ~/.xfce-session.sh...${NC}"
+echo -e "${WHITE}[4/5] Rewriting ~/.xfce-session.sh...${NC}"
 
 cat > "$HOME/.xfce-session.sh" << 'SESSIONEOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -205,6 +205,125 @@ exec dbus-launch --exit-with-session startxfce4
 SESSIONEOF
 chmod +x "$HOME/.xfce-session.sh"
 echo -e "  ${GREEN}[+]${NC} ~/.xfce-session.sh rewritten"
+
+# ---------- 5. Rewrite start-linux.sh's VirGL launch ----------
+#
+# Second bug, found after the first fix landed:
+#
+#   lost connection to rendering server on 8 read -1 22
+#   proot info: vpid 1: terminated with signal 6
+#
+# Two causes, both on the HOST side of the virgl bridge:
+#
+#   a) virgl_test_server_android was being launched with
+#      --use-egl-surfaceless --use-gles. Those are flags for the generic
+#      virgl_test_server. The _android build is already preconfigured for
+#      Android GLES and exits when handed them. It died instantly, so the
+#      guest connected to nothing and aborted with SIGABRT.
+#
+#   b) The virgl server itself needs a GPU driver to do the real work.
+#      Removing GALLIUM_DRIVER from the host env file (correct, it was
+#      leaking into the guest) also starved the server. The fix is to
+#      SCOPE those vars to the server process, not to delete them.
+echo ""
+echo -e "${WHITE}[5/5] Fixing the VirGL server launch in start-linux.sh...${NC}"
+
+[ -f "$HOME/start-linux.sh" ] && cp "$HOME/start-linux.sh" "$HOME/start-linux.sh.bak"
+
+cat > "$HOME/start-linux.sh" << 'LAUNCHEREOF'
+#!/data/data/com.termux/files/usr/bin/bash
+set -u
+
+[ -f "$HOME/.config/termux-ubuntu.conf" ] && source "$HOME/.config/termux-ubuntu.conf"
+DISTRO_ID="${DISTRO_ID:-ubuntu}"
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+TMPDIR="${TMPDIR:-$PREFIX/tmp}"
+export TMPDIR
+
+fail() { printf '\033[0;31m[!] %s\033[0m\n' "$1"; exit 1; }
+
+GPU_MODE="$(cat "$HOME/.config/gpu-mode" 2>/dev/null || echo virgl)"
+
+echo ""
+echo "[*] Starting XFCE4 inside Ubuntu   (GPU mode: $GPU_MODE)"
+echo ""
+
+command -v proot-distro >/dev/null 2>&1 || fail "proot-distro missing. Re-run setup."
+command -v termux-x11   >/dev/null 2>&1 || fail "termux-x11 missing. Re-run setup."
+proot-distro login "$DISTRO_ID" -- true >/dev/null 2>&1 \
+    || fail "Ubuntu container missing. Run: proot-distro install $DISTRO_ID"
+
+echo "[*] Cleaning up old sessions..."
+"$HOME/.x11-cleanup.sh"
+
+if command -v pulseaudio >/dev/null 2>&1; then
+    unset PULSE_SERVER
+    pulseaudio --kill 2>/dev/null || true
+    sleep 0.5
+    echo "[*] Starting audio server..."
+    if pulseaudio --start --exit-idle-time=-1 2>"$TMPDIR/pulse-err.log"; then
+        pactl load-module module-native-protocol-tcp \
+            auth-ip-acl=127.0.0.1 auth-anonymous=1 >/dev/null 2>&1 || true
+        export PULSE_SERVER=tcp:127.0.0.1
+        echo "  [+] Audio server running"
+    else
+        echo "  [-] Audio failed. Continuing without sound. Log: $TMPDIR/pulse-err.log"
+    fi
+fi
+
+# VirGL: only in virgl mode, and only if it actually stays alive.
+if [ "$GPU_MODE" = "virgl" ] && command -v virgl_test_server_android >/dev/null 2>&1; then
+    echo "[*] Starting VirGL server..."
+    # No --use-* flags. Those belong to the generic virgl_test_server; the
+    # _android build is preconfigured for Android GLES and exits if given
+    # them, which is what produced "lost connection to rendering server".
+    # GPU vars are scoped to this subshell so they never reach the guest.
+    (
+        export XDG_RUNTIME_DIR="$TMPDIR"
+        export MESA_NO_ERROR=1
+        export MESA_GL_VERSION_OVERRIDE=4.0
+        export GALLIUM_DRIVER=zink
+        exec virgl_test_server_android
+    ) >"$TMPDIR/virgl.log" 2>&1 &
+    VIRGL_PID=$!
+    sleep 2
+    if kill -0 "$VIRGL_PID" 2>/dev/null; then
+        echo "  [+] VirGL server running (pid $VIRGL_PID)"
+    else
+        echo "  [-] VirGL server died on startup."
+        echo "      Log: $TMPDIR/virgl.log"
+        echo "      Falling back to software rendering for this run."
+        export SOFTWARE_MODE=1
+    fi
+fi
+
+if command -v am >/dev/null 2>&1; then
+    echo "[*] Opening the Termux:X11 app..."
+    am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity \
+        >/dev/null 2>&1 || echo "  [*] Open Termux:X11 manually."
+    sleep 2
+fi
+
+export XKB_CONFIG_ROOT="$PREFIX/share/X11/xkb"
+export DISPLAY=:0
+
+echo "-----------------------------------------------"
+echo "  [*] Switch to the Termux:X11 app to see the desktop"
+echo "-----------------------------------------------"
+echo ""
+echo "[*] Launching X server + XFCE4 session..."
+
+exec termux-x11 :0 -xstartup "$HOME/.xfce-session.sh"
+LAUNCHEREOF
+
+chmod +x "$HOME/start-linux.sh"
+
+if bash -n "$HOME/start-linux.sh" 2>/dev/null; then
+    echo -e "  ${GREEN}[+]${NC} start-linux.sh rewritten (backup: start-linux.sh.bak)"
+else
+    echo -e "  ${RED}[!]${NC} rewrite failed syntax check, restoring backup"
+    [ -f "$HOME/start-linux.sh.bak" ] && mv "$HOME/start-linux.sh.bak" "$HOME/start-linux.sh"
+fi
 
 echo ""
 echo -e "${GREEN}=== Done ===${NC}"

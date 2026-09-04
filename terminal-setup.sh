@@ -743,10 +743,32 @@ if command -v pulseaudio >/dev/null 2>&1; then
     fi
 fi
 
-if command -v virgl_test_server_android >/dev/null 2>&1; then
-    echo "[*] Starting VirGL fallback server..."
-    virgl_test_server_android --use-egl-surfaceless --use-gles \
-        >"$TMPDIR/virgl.log" 2>&1 &
+# FIX 10: only start VirGL in virgl mode, with no --use-* flags, and
+# verify it survives. Those flags belong to the generic virgl_test_server;
+# the _android build is preconfigured for Android GLES and exits when
+# given them, which produced "lost connection to rendering server" and a
+# SIGABRT in the guest. GPU vars are scoped to this subshell so they can
+# never leak into the container.
+GPU_MODE="$(cat "$HOME/.config/gpu-mode" 2>/dev/null || echo virgl)"
+if [ "$GPU_MODE" = "virgl" ] && command -v virgl_test_server_android >/dev/null 2>&1; then
+    echo "[*] Starting VirGL server..."
+    (
+        export XDG_RUNTIME_DIR="$TMPDIR"
+        export MESA_NO_ERROR=1
+        export MESA_GL_VERSION_OVERRIDE=4.0
+        export GALLIUM_DRIVER=zink
+        exec virgl_test_server_android
+    ) >"$TMPDIR/virgl.log" 2>&1 &
+    VIRGL_PID=$!
+    sleep 2
+    if kill -0 "$VIRGL_PID" 2>/dev/null; then
+        echo "  [+] VirGL server running (pid $VIRGL_PID)"
+    else
+        echo "  [-] VirGL server died on startup."
+        echo "      Log: $TMPDIR/virgl.log"
+        echo "      Falling back to software rendering for this run."
+        export SOFTWARE_MODE=1
+    fi
 fi
 
 # Bring the Termux:X11 app to the foreground so it has a surface to draw on.
