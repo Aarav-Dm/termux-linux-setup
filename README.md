@@ -118,6 +118,7 @@ It opens the Termux:X11 app for you. Switch to that app to see the desktop.
 | `./setup-browser.sh firefox\|chromium` | Install a browser that actually runs under PRoot |
 | `./polish-desktop.sh` | Silence fixable XFCE startup noise, install wallpapers, drop light-locker |
 | `./stop-linux.sh` | Stop the desktop and clean up sockets |
+| `./uninstall.sh` | Dry-run what removal would delete (add `--run` to do it) |
 
 ### Verifying GPU acceleration
 
@@ -244,6 +245,27 @@ adb shell settings put global settings_enable_monitor_phantom_procs false
 proot-distro remove ubuntu
 ./terminal-setup.sh
 ```
+
+---
+
+---
+
+## Uninstalling
+
+```bash
+curl -O https://raw.githubusercontent.com/Aarav-Dm/termux-linux-setup/main/uninstall.sh
+chmod +x uninstall.sh
+./uninstall.sh            # dry run: lists everything, deletes nothing
+./uninstall.sh --run      # backs up, then asks you to type DELETE
+```
+
+Removes the container, every script and config this project wrote, the `~/Storage` symlink, the `.bashrc` autostart block, and the Termux packages it installed.
+
+**Never touched:** your device storage (only the *symlink* is removed, never its target), Termux itself, packages you installed yourself, and anything under `~/storage`.
+
+**Not removable from a script:** the Termux:X11 APK (Android Settings) and the Developer options phantom-process change (revert manually).
+
+`--run` offers to tar `/home/<user>` from the container to your shared storage first, and aborts the whole uninstall if that backup fails. Add `--keep-packages` to remove the container and scripts but leave the Termux packages in place.
 
 ---
 
