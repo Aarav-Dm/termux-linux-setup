@@ -114,6 +114,7 @@ It opens the Termux:X11 app for you. Switch to that app to see the desktop.
 | `./switch-gpu.sh virgl\|zink\|software` | Swap the GPU rendering mode |
 | `./switch-vulkan.sh turnip\|android` | Swap the host Vulkan loader |
 | `./update-ubuntu.sh` | Update the Termux host and the Ubuntu container |
+| `./setup-browser.sh firefox\|chromium` | Install a browser that actually runs under PRoot |
 | `./polish-desktop.sh` | Silence fixable XFCE startup noise, install wallpapers, drop light-locker |
 | `./stop-linux.sh` | Stop the desktop and clean up sockets |
 
@@ -146,6 +147,29 @@ The desktop prints a handful of warnings on every launch. Most are permanent: XF
 **Permanent and harmless — no fix exists in PRoot:**
 
 `Failed to get a systemd proxy` · `Failed to connect to colord` · `polkit ... Error getting authority` · `Failed to get system bus` · `GVFS-RemoteVolumeMonitor ... not supported` · `_IceTransmkdir: euid != 0` · `Failed to fetch _NET_CURRENT_DESKTOP` (startup race, resolves itself) · `pm-is-supported` missing (suspend/resume, meaningless on a tablet)
+
+---
+
+### Why the browser icon is there but nothing opens
+
+Two separate structural problems, neither of them your install going wrong.
+
+**The snap trap.** On Ubuntu 22.04 and later, `apt install firefox` and `apt install chromium-browser` install *transitional* packages whose only job is to pull the snap. `terminal-setup.sh` blocks snapd deliberately, because snap cannot function under PRoot at all. The transitional package still drops a `.desktop` file, so you get a menu icon backed by a binary that can never start.
+
+**The sandbox.** Chromium's sandbox is built on unprivileged user namespaces. PRoot emulates syscalls with ptrace and cannot provide them, so Chromium dies while spawning its child processes. That is the "child process" error. `--no-sandbox` is mandatory here, not a workaround.
+
+`./setup-browser.sh` removes the transitional package, installs a real `.deb` from the mozillateam PPA (or xtradeb for Chromium), pins apt so it does not silently revert to the snap, and writes a launcher with the required flags baked in.
+
+**Security:** a no-sandbox browser has no isolation between tabs. Use it for docs, search and testing. Sign in to banking, university and email accounts in Android Chrome instead.
+
+### "It looks old"
+
+Two different things get read as "old":
+
+- **The Ubuntu release.** `./setup-browser.sh` prints it. The `uname` line will show an *Android* kernel version, because PRoot shares the host kernel. That is not the Ubuntu release and cannot be upgraded from inside the container.
+- **XFCE itself.** XFCE's default theme is deliberately conservative and looks a decade old out of the box. That is styling, not staleness. `apt install arc-theme papirus-icon-theme` then Settings → Appearance changes it in a minute.
+
+If the desktop feels *slow* rather than looks dated, check the renderer with `glxinfo -B | head -20` inside the desktop. `llvmpipe` means software rendering, and `./switch-gpu.sh` is the fix.
 
 ---
 
