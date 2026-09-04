@@ -114,6 +114,7 @@ It opens the Termux:X11 app for you. Switch to that app to see the desktop.
 | `./switch-gpu.sh virgl\|zink\|software` | Swap the GPU rendering mode |
 | `./switch-vulkan.sh turnip\|android` | Swap the host Vulkan loader |
 | `./update-ubuntu.sh` | Update the Termux host and the Ubuntu container |
+| `./whatami.sh` | Report the actual Ubuntu release, proot-distro version, and packages |
 | `./setup-browser.sh firefox\|chromium` | Install a browser that actually runs under PRoot |
 | `./polish-desktop.sh` | Silence fixable XFCE startup noise, install wallpapers, drop light-locker |
 | `./stop-linux.sh` | Stop the desktop and clean up sockets |
@@ -166,7 +167,15 @@ Two separate structural problems, neither of them your install going wrong.
 
 Two different things get read as "old":
 
-- **The Ubuntu release.** `./setup-browser.sh` prints it. The `uname` line will show an *Android* kernel version, because PRoot shares the host kernel. That is not the Ubuntu release and cannot be upgraded from inside the container.
+- **The Ubuntu release.** Run `./whatami.sh`. Note the `uname` line shows an *Android* kernel version, because PRoot shares the host kernel — that is not your Ubuntu release and cannot be upgraded from inside the container.
+
+  **Which release you got depends on your proot-distro version.** proot-distro 5.x pulls from Docker Hub, where a bare `ubuntu` resolves to the `:latest` tag — and Docker's `ubuntu:latest` tracks the newest release, not the newest LTS, and it moves over time. Earlier versions of this script installed a bare `ubuntu`, so two people running it weeks apart got different systems. It now pins the release explicitly:
+
+  ```bash
+  UBUNTU_RELEASE=26.04 ./terminal-setup.sh   # override; default is 24.04 LTS
+  ```
+
+  The default is the LTS for wider package coverage and fewer PPA gaps. If your container feels unfamiliar rather than old, you may be on a *newer* release than you expected, not an older one.
 - **XFCE itself.** XFCE's default theme is deliberately conservative and looks a decade old out of the box. That is styling, not staleness. `apt install arc-theme papirus-icon-theme` then Settings → Appearance changes it in a minute.
 
 If the desktop feels *slow* rather than looks dated, check the renderer with `glxinfo -B | head -20` inside the desktop. `llvmpipe` means software rendering, and `./switch-gpu.sh` is the fix.

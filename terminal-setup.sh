@@ -37,7 +37,7 @@ ERROR_LOG="$HOME/linux-setup-errors.log"
 : > "$ERROR_LOG"
 
 DISTRO_ID="ubuntu"
-DISTRO_NAME="Ubuntu 24.04 LTS"
+DISTRO_NAME="Ubuntu (release resolved at install time)"
 UBUNTU_USER="droid"
 
 DEVICE_MODEL="Unknown"
@@ -377,20 +377,41 @@ step_ubuntu_install() {
         exit 1
     fi
 
+    # FIX 11: pin the release. Do not install a bare "ubuntu".
+    #
+    # proot-distro 5.x pulls from Docker Hub, where a bare name resolves
+    # to the ":latest" tag. Docker's ubuntu:latest tracks the newest
+    # release, NOT the newest LTS, and it moves. Installing "ubuntu"
+    # therefore gives whatever shipped this month, and two people running
+    # this script weeks apart get different systems. A setup script must
+    # be deterministic.
+    #
+    # Default is the LTS: wider package coverage, fewer PPA gaps, and it
+    # is what community guides assume. Override for a newer release with:
+    #     UBUNTU_RELEASE=26.04 ./terminal-setup.sh
+    UBUNTU_RELEASE="${UBUNTU_RELEASE:-24.04}"
+
     local known
     known=$(proot-distro list 2>/dev/null | awk '{print $1}')
 
-    if ! printf '%s\n' "$known" | grep -qx "$DISTRO_ID"; then
-        for candidate in ubuntu ubuntu-24.04 ubuntu-22.04; do
+    # proot-distro 5.x accepts "name:tag"; older builds use plugin aliases.
+    if proot-distro install --help 2>&1 | grep -qi "image\|tag\|ubuntu:"; then
+        DISTRO_ID="ubuntu:${UBUNTU_RELEASE}"
+        DISTRO_NAME="Ubuntu ${UBUNTU_RELEASE}"
+        echo -e "  [*] proot-distro supports pinned images."
+    else
+        for candidate in "ubuntu-${UBUNTU_RELEASE}" ubuntu-24.04 ubuntu-22.04 ubuntu; do
             if printf '%s\n' "$known" | grep -qx "$candidate"; then
                 DISTRO_ID="$candidate"
                 DISTRO_NAME="Ubuntu (${candidate})"
                 break
             fi
         done
+        echo -e "  ${YELLOW}[!] Older proot-distro: cannot pin a tag.${NC}"
+        echo -e "  ${YELLOW}    Release will be whatever this alias ships.${NC}"
     fi
 
-    echo -e "  [*] Selected Ubuntu alias: ${WHITE}${DISTRO_ID}${NC}"
+    echo -e "  [*] Selected Ubuntu image: ${WHITE}${DISTRO_ID}${NC}"
 
     if proot-distro login "$DISTRO_ID" -- true >/dev/null 2>&1; then
         echo -e "  [+] ${GREEN}Existing Ubuntu container is healthy, reusing it.${NC}"
