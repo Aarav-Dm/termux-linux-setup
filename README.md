@@ -119,6 +119,7 @@ It opens the Termux:X11 app for you. Switch to that app to see the desktop.
 | `./polish-desktop.sh` | Silence fixable XFCE startup noise, install wallpapers, drop light-locker |
 | `./stop-linux.sh` | Stop the desktop and clean up sockets |
 | `./uninstall.sh` | Dry-run what removal would delete (add `--run` to do it) |
+| `./nuke.sh` | Remove everything now, no prompts, DroidDesk-aware |
 
 ### Verifying GPU acceleration
 
@@ -266,6 +267,23 @@ Removes the container, every script and config this project wrote, the `~/Storag
 **Not removable from a script:** the Termux:X11 APK (Android Settings) and the Developer options phantom-process change (revert manually).
 
 `--run` offers to tar `/home/<user>` from the container to your shared storage first, and aborts the whole uninstall if that backup fails. Add `--keep-packages` to remove the container and scripts but leave the Termux packages in place.
+
+### Switching to DroidDesk
+
+[DroidDesk](https://github.com/orailnoor/DroidDesk) runs on the same stack this project does: Termux, Termux:X11, TUR and Proot. So a clean slate for it is **not** "remove everything" — pulling out those shared packages just forces DroidDesk to redownload them, and uninstalling the Termux:X11 APK would break it outright.
+
+`nuke.sh` does the right removal for that case, in one command with no prompts:
+
+```bash
+curl -O https://raw.githubusercontent.com/Aarav-Dm/termux-linux-setup/main/nuke.sh
+chmod +x nuke.sh && ./nuke.sh
+```
+
+**Removes:** the container, every script and config here, the `~/Storage` symlink, the `.bashrc` autostart block (which would otherwise fight DroidDesk on every Termux launch), and stale X11 sockets.
+
+**Keeps:** Termux, the Termux:X11 APK, `proot-distro`, `termux-x11-nightly`, `x11-repo`, `tur-repo`, and your device storage.
+
+It tars the container home to shared storage first if that home exceeds ~50 MB, automatically and without asking; below that it assumes a fresh install and skips. Force with `--backup` / `--no-backup`. Use `--purge-packages` only if you want the shared packages gone too.
 
 ---
 
